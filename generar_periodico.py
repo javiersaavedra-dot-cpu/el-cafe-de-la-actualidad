@@ -164,16 +164,34 @@ def choose(items):
     # Presentación por actualidad, no por orden de selección de las secciones.
     return sorted(selected[:LIMIT], key=lambda x: x['published'], reverse=True)
 
+# Ilustraciones decorativas integradas en el HTML: sin imágenes externas.
+SECTION_ART = {
+    'España': ('🇪🇸', 'ACTUALIDAD'),
+    'Internacional': ('🌍', 'EL MUNDO'),
+    'Local': ('🏛️', 'BURGOS Y CASTILLA Y LEÓN'),
+    'Sociedad': ('📰', 'SOCIEDAD'),
+    'Ciencia': ('🔬', 'CIENCIA Y DESCUBRIMIENTOS'),
+    'Cultura': ('🎭', 'CULTURA'),
+    'Deportes': ('⚽', 'DEPORTES'),
+}
+
 def card(it):
     e = lambda s: html.escape(s or '', quote=True)
-    img = (f'<img loading="lazy" referrerpolicy="no-referrer" src="{e(it["image"])}" alt="Imagen proporcionada por {e(it["source"])}" onerror="this.style.display=\'none\'">'
-           if it['image'] else '<div class="placeholder">☕</div>')
+    symbol, label = SECTION_ART.get(it['section'], ('☕', 'ACTUALIDAD'))
+    # La ilustración permanece detrás de la fotografía: si falla la carga,
+    # el navegador muestra automáticamente la alternativa decorativa.
+    fallback = (f'<div class="fallback" aria-label="Ilustración decorativa de {e(it["section"])}">'
+                f'<span class="fallback-glow"></span><span class="fallback-symbol">{symbol}</span>'
+                f'<span class="fallback-label">{e(label)}</span></div>')
+    img = (f'<img loading="lazy" referrerpolicy="no-referrer" src="{e(it["image"])}" '
+           f'alt="Imagen proporcionada por {e(it["source"])}" '
+           f'onerror="this.style.display=\'none\'">' if it['image'] else '')
     excerpt = it['description'] or 'Consulta la noticia completa en el medio de origen.'
-    return (f'<article class="card"><div class="visual">{img}</div><div class="inner">'
+    return (f'<article class="card"><div class="visual">{fallback}{img}</div><div class="inner">'
             f'<div class="section">{e(it["section"])} · {e(it["source"])}</div>'
             f'<h2><a href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">{e(it["title"])}</a></h2>'
             f'<p>{e(excerpt)}</p><p class="note">Resumen extraído del RSS del medio; puede ser breve o incompleto. '
-            f'La fotografía, si aparece, procede del feed original.</p>'
+            f'La fotografía, si aparece, procede del feed original. Las ilustraciones son decorativas.</p>'
             f'<a class="more" href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">Leer noticia original →</a>'
             f'</div></article>')
 
@@ -192,7 +210,7 @@ def main():
 <link rel="apple-touch-icon" href="icono.png">
 <link rel="manifest" href="manifest.json">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>El café de la actualidad · {date}</title><style>
-*{{box-sizing:border-box}}body{{margin:0;background:#f1eee8;color:#222;font-family:Georgia,'Times New Roman',serif}}header{{background:#fff;text-align:center;border-bottom:4px double #1f1f1f;padding:26px 12px}}.tag{{font:700 11px Arial,sans-serif;letter-spacing:3px;color:#3c6575;text-transform:uppercase}}h1{{font-size:clamp(32px,6vw,66px);letter-spacing:-2px;margin:8px 0}}header p{{font:14px Arial,sans-serif;color:#666}}main{{max-width:1320px;margin:0 auto;padding:28px 18px 55px}}.intro{{margin:0 0 23px;border-bottom:1px solid #bbb;padding-bottom:14px;font:15px Arial,sans-serif;line-height:1.6}}.grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}}.card{{background:white;min-width:0;border:1px solid #dcd7cd;box-shadow:0 2px 9px #00000009}}.visual{{height:205px;background:#e6e0d5;overflow:hidden}}.visual img{{width:100%;height:100%;object-fit:cover}}.placeholder{{height:100%;display:grid;place-items:center;font-size:45px;color:#9c9488}}.inner{{padding:19px 21px 23px}}.section{{font:700 11px Arial,sans-serif;color:#2e6a80;letter-spacing:1px;text-transform:uppercase}}h2{{font-size:clamp(20px,2vw,26px);line-height:1.12;margin:10px 0 13px}}h2 a{{text-decoration:none;color:inherit}}h2 a:hover{{color:#235c73}}.card p{{font-size:16px;line-height:1.48}}.note{{font:12px/1.4 Arial,sans-serif!important;color:#777}}.more{{font:700 13px Arial,sans-serif;color:#226079;text-decoration:none}}footer{{text-align:center;padding:25px;font:12px/1.5 Arial,sans-serif;color:#777}}@media(max-width:980px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}main{{padding:18px 12px}}.visual{{height:225px}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:#f1eee8;color:#222;font-family:Georgia,'Times New Roman',serif}}header{{background:#fff;text-align:center;border-bottom:4px double #1f1f1f;padding:26px 12px}}.tag{{font:700 11px Arial,sans-serif;letter-spacing:3px;color:#3c6575;text-transform:uppercase}}h1{{font-size:clamp(32px,6vw,66px);letter-spacing:-2px;margin:8px 0}}header p{{font:14px Arial,sans-serif;color:#666}}main{{max-width:1320px;margin:0 auto;padding:28px 18px 55px}}.intro{{margin:0 0 23px;border-bottom:1px solid #bbb;padding-bottom:14px;font:15px Arial,sans-serif;line-height:1.6}}.grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}}.card{{background:white;min-width:0;border:1px solid #dcd7cd;box-shadow:0 2px 9px #00000009}}.visual{{height:205px;background:#e6e0d5;overflow:hidden;position:relative}}.visual img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.fallback{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;position:relative;overflow:hidden;background:linear-gradient(135deg,#d9e6e4,#f1e2cb);color:#385d63}}.fallback-glow{{position:absolute;width:260px;height:260px;border:2px solid #ffffff66;border-radius:50%;box-shadow:0 0 0 38px #ffffff24,0 0 0 78px #ffffff19}}.fallback-symbol{{position:relative;font-size:66px;line-height:1.1;filter:drop-shadow(0 4px 5px #00000020)}}.fallback-label{{position:relative;font:700 11px Arial,sans-serif;letter-spacing:2px;text-align:center;padding:0 15px}}.inner{{padding:19px 21px 23px}}.section{{font:700 11px Arial,sans-serif;color:#2e6a80;letter-spacing:1px;text-transform:uppercase}}h2{{font-size:22px;line-height:1.12;margin:10px 0 13px}}h2 a{{text-decoration:none;color:inherit}}h2 a:hover{{color:#235c73}}.card p{{font-size:16px;line-height:1.48}}.note{{font:12px/1.4 Arial,sans-serif!important;color:#777}}.more{{font:700 13px Arial,sans-serif;color:#226079;text-decoration:none}}footer{{text-align:center;padding:25px;font:12px/1.5 Arial,sans-serif;color:#777}}@media(max-width:980px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}main{{padding:18px 12px}}.visual{{height:225px}}h2{{font-size:20px}}}}
 </style></head><body><header><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p></header><main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p><div class="grid">{body}</div></main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(page)
