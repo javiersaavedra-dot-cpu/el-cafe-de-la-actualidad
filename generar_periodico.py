@@ -166,7 +166,7 @@ def choose(items):
 
 # Ilustraciones decorativas integradas en el HTML: sin imágenes externas.
 SECTION_ART = {
-    'España': ('🇪🇸', 'ACTUALIDAD'),
+    'Actualidad': ('🌍', 'ACTUALIDAD')
     'Internacional': ('🌍', 'EL MUNDO'),
     'Local': ('🏛️', 'BURGOS Y CASTILLA Y LEÓN'),
     'Sociedad': ('📰', 'SOCIEDAD'),
