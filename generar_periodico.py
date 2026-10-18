@@ -190,7 +190,7 @@ def card(it):
            f'alt="Imagen proporcionada por {e(it["source"])}" '
            f'onerror="this.style.display=\'none\'">' if it['image'] else '')
     excerpt = it['description'] or 'Consulta la noticia completa en el medio de origen.'
-    return (f'<article class="card"><div class="visual">{fallback}{img}</div><div class="inner">'
+    return (f'<article id="noticia-{it.get("story_id", 0)}" class="card"><div class="visual">{fallback}{img}</div><div class="inner">'
             f'<div class="section">{e(it["section"])} · {e(it["source"])}</div>'
             f'<h2><a href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">{e(it["title"])}</a></h2>'
             f'<p>{e(excerpt)}</p><p class="note">Resumen extraído del RSS del medio; puede ser breve o incompleto. '
@@ -262,21 +262,75 @@ SECTION_ORDER = [
     ('Ciencia', 'Ciencia', 'ciencia'),
 ]
 
-def sections_html(chosen):
+def importance_score(it, all_items):
+    """Heurística editorial: actualidad, alcance y corroboración entre medios.
+
+    No es una evaluación periodística ni garantiza la noticia más importante.
+    """
+    age = max(0, (NOW - it['published']).total_seconds() / 3600)
+    score = max(0, 24 - age * 0.65)
+    section_weight = {'Internacional': 16, 'España': 15, 'Sociedad': 10,
+                      'Local': 8, 'Ciencia': 5, 'Cultura': 4, 'Deportes': 4}
+    score += section_weight.get(it['section'], 0)
+    title = it['title'].lower()
+    important = ('guerra', 'ataque', 'atentado', 'elecciones', 'elección', 'crisis',
+                 'terremoto', 'inundaci', 'incendio', 'muertos', 'fallecidos',
+                 'manifestaci', 'protesta', 'acuerdo', 'alto el fuego', 'dimisión',
+                 'emergencia', 'evacuación', 'conflicto', 'parlamento', 'gobierno')
+    score += min(18, 9 * sum(word in title for word in important))
+    # Un mismo suceso tratado por varias cabeceras aporta confianza a la prioridad.
+    corroborating = {other['source'] for other in all_items
+                     if other['source'] != it['source'] and similar(it['title'], other['title'])}
+    score += min(24, len(corroborating) * 12)
+    # Evita elegir una noticia principal de apenas una frase cuando hay alternativas.
+    if len(it['description']) < 90:
+        score -= 8
+    return score
+
+
+def cover_html(chosen, all_items):
+    """Portada destacada y tres avances que enlazan a sus noticias completas."""
+    ranked = sorted(chosen, key=lambda it: importance_score(it, all_items), reverse=True)
+    lead = ranked[0]
+    secondary = ranked[1:4]
+    e = lambda value: html.escape(value or '', quote=True)
+    symbol, label = SECTION_ART.get(lead['section'], ('☕', 'ACTUALIDAD'))
+    fallback = (f'<div class="fallback" aria-label="Ilustración decorativa">'
+                f'<span class="fallback-glow"></span><span class="fallback-symbol">{symbol}</span>'
+                f'<span class="fallback-label">{e(label)}</span></div>')
+    photo = (f'<img src="{e(lead["image"])}" alt="Fotografía facilitada por {e(lead["source"])}" '
+             'referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">') if lead['image'] else ''
+    summary = lead['description'] or 'Lee la información en el medio de origen.'
+    hero = (f'<article class="cover-lead"><div class="cover-image">{fallback}{photo}</div>'
+            f'<div class="cover-copy"><span class="cover-label">LA NOTICIA DEL DÍA · {e(lead["section"])}</span>'
+            f'<h2>{e(lead["title"])}</h2><p>{e(summary)}</p>'
+            f'<span class="cover-source">Fuente: {e(lead["source"])}</span><br>'
+            f'<a class="more" href="{e(lead["link"])}" target="_blank" rel="noopener noreferrer">Leer noticia original →</a>'
+            '</div></article>')
+    teasers = ''.join(f'<a class="cover-teaser" href="#noticia-{it["story_id"]}">'
+                      f'<span>{e(it["section"])} · {e(it["source"])}</span>'
+                      f'<strong>{e(it["title"])}</strong><small>Ver noticia en su sección ↓</small></a>'
+                      for it in secondary)
+    return ('<section class="cover" id="portada-noticias"><h2 class="cover-heading">Portada</h2>'
+            + hero + '<h3 class="cover-subtitle">Otras noticias destacadas</h3>'
+            + f'<div class="cover-teasers">{teasers}</div></section>'), lead
+
+
+def sections_html(chosen, lead):
     """Agrupa las noticias por sección y crea destinos para el menú."""
     output = []
     for section, label, anchor in SECTION_ORDER:
-        articles = [item for item in chosen if item['section'] == section]
+        articles = [item for item in chosen if item['section'] == section and item is not lead]
         if not articles:
             continue
         output.append(f'<section class="news-section" id="{anchor}" aria-labelledby="heading-{anchor}">'
                       f'<div class="section-heading"><h2 id="heading-{anchor}">{label}</h2>'
-                      f'<a href="#portada" class="back-top">↑ Portada</a></div>'
+                      f'<a href="#portada-noticias" class="back-top">↑ Portada</a></div>'
                       f'<div class="grid">{"".join(card(item) for item in articles)}</div></section>')
     return '\n'.join(output)
 
 def navigation_html(chosen):
-    links = ['<a href="#portada">Portada</a>']
+    links = ['<a href="#portada-noticias">Portada</a>']
     for section, label, anchor in SECTION_ORDER:
         if any(item['section'] == section for item in chosen):
             links.append(f'<a href="#{anchor}">{label}</a>')
@@ -290,7 +344,10 @@ def main():
     if len(chosen) < 5:
         raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
     date = NOW.strftime('%d/%m/%Y')
-    body = sections_html(chosen)
+    for i, item in enumerate(chosen):
+        item['story_id'] = i + 1
+    cover, lead = cover_html(chosen, items)
+    body = sections_html(chosen, lead)
     navigation = navigation_html(chosen)
     forecast_html = weather_block()
     edition = 'Edición de fin de semana' if WEEKEND else 'Edición diaria'
@@ -302,7 +359,8 @@ def main():
 *{{box-sizing:border-box}}body{{margin:0;background:#f1eee8;color:#222;font-family:Georgia,'Times New Roman',serif}}html{{scroll-behavior:smooth;scroll-padding-top:70px}}header{{background:#fff;text-align:center;border-bottom:4px double #1f1f1f;padding:26px 12px}}.tag{{font:700 11px Arial,sans-serif;letter-spacing:3px;color:#3c6575;text-transform:uppercase}}h1{{font-size:clamp(32px,6vw,66px);letter-spacing:-2px;margin:8px 0}}header p{{font:14px Arial,sans-serif;color:#666}}main{{max-width:1320px;margin:0 auto;padding:28px 18px 55px}}.intro{{margin:0 0 23px;border-bottom:1px solid #bbb;padding-bottom:14px;font:15px Arial,sans-serif;line-height:1.6}}.grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}}.card{{background:white;min-width:0;border:1px solid #dcd7cd;box-shadow:0 2px 9px #00000009}}.visual{{height:205px;background:#e6e0d5;overflow:hidden;position:relative}}.visual img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.fallback{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;position:relative;overflow:hidden;background:linear-gradient(135deg,#d9e6e4,#f1e2cb);color:#385d63}}.fallback-glow{{position:absolute;width:260px;height:260px;border:2px solid #ffffff66;border-radius:50%;box-shadow:0 0 0 38px #ffffff24,0 0 0 78px #ffffff19}}.fallback-symbol{{position:relative;font-size:66px;line-height:1.1;filter:drop-shadow(0 4px 5px #00000020)}}.fallback-label{{position:relative;font:700 11px Arial,sans-serif;letter-spacing:2px;text-align:center;padding:0 15px}}.inner{{padding:19px 21px 23px}}.section{{font:700 11px Arial,sans-serif;color:#2e6a80;letter-spacing:1px;text-transform:uppercase}}h2{{font-size:22px;line-height:1.12;margin:10px 0 13px}}h2 a{{text-decoration:none;color:inherit}}h2 a:hover{{color:#235c73}}.card p{{font-size:16px;line-height:1.48}}.note{{font:12px/1.4 Arial,sans-serif!important;color:#777}}.more{{font:700 13px Arial,sans-serif;color:#226079;text-decoration:none}}footer{{text-align:center;padding:25px;font:12px/1.5 Arial,sans-serif;color:#777}}@media(max-width:980px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}main{{padding:18px 12px}}.visual{{height:225px}}h2{{font-size:20px}}}}
  .news-nav{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:2px solid #252525;box-shadow:0 2px 8px #00000012;font-family:Arial,sans-serif}}.nav-inner{{max-width:1320px;margin:auto;display:flex;gap:4px;align-items:center;overflow-x:auto;white-space:nowrap;padding:0 12px;scrollbar-width:thin}}.news-nav a{{display:inline-block;padding:14px 13px;text-decoration:none;color:#222;font-size:13px;font-weight:700}}.news-nav a:hover,.news-nav a:focus-visible{{background:#eee9df;color:#1b6177}}.news-section{{margin:24px 0 42px;scroll-margin-top:74px}}.section-heading{{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:3px solid #262626;border-bottom:1px solid #bbb;margin:0 0 20px;padding:9px 0}}.section-heading h2{{font:700 clamp(23px,3vw,31px) Georgia,serif;margin:0}}.back-top{{font:12px Arial,sans-serif;color:#31677a;text-decoration:none}}@media(max-width:640px){{.news-nav a{{padding:12px 10px;font-size:12px}}.news-section{{margin-bottom:32px}}}}
  .weather{{max-width:850px;margin:16px auto 0;padding:13px 18px;border:1px solid #ded9cf;border-radius:9px;background:#f7f5ef;font-family:Arial,sans-serif;text-align:center}}.weather-title{{font-size:12px;letter-spacing:1.4px;font-weight:700;color:#31586a}}.weather-title span{{font-weight:400;letter-spacing:0;color:#777}}.weather-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}}.weather-time{{display:flex;flex-direction:column;align-items:center;gap:5px;border-right:1px solid #ddd;font-size:12px;color:#555}}.weather-time:last-child{{border-right:0}}.weather-hour{{font-weight:700}}.weather-icon{{font-size:24px}}.weather-time strong{{font-size:19px;color:#222}}.weather-time small{{font-size:11px}}.weather-credit{{font-size:10px;color:#777}}.weather-unavailable{{font-size:12px}}@media(max-width:640px){{.weather{{padding:11px 6px}}.weather-time strong{{font-size:17px}}.weather-time small{{font-size:10px}}}}
-</style></head><body><header id="portada"><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header>{navigation}<main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p>{body}</main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
+ .cover{{scroll-margin-top:74px;margin-bottom:35px}}.cover-heading{{font:700 30px Georgia,serif;border-bottom:3px solid #222;padding-bottom:12px;margin:0 0 20px}}.cover-lead{{display:grid;grid-template-columns:1.05fr 1fr;background:#fff;border:1px solid #dcd7cd}}.cover-image{{position:relative;min-height:340px;overflow:hidden;background:#e6e0d5}}.cover-image img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.cover-copy{{padding:28px}}.cover-label{{font:700 12px Arial,sans-serif;letter-spacing:1px;color:#a0392f}}.cover-copy h2{{font-size:clamp(26px,3.2vw,42px);line-height:1.12;margin:14px 0}}.cover-copy p{{font:17px/1.55 Georgia,serif}}.cover-source{{display:inline-block;font:12px Arial,sans-serif;color:#666;margin-bottom:15px}}.cover-subtitle{{font:700 21px Georgia,serif;margin:25px 0 13px}}.cover-teasers{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}}.cover-teaser{{display:flex;flex-direction:column;gap:10px;text-decoration:none;color:#222;border-top:3px solid #333;background:#fff;padding:18px;min-width:0}}.cover-teaser span{{font:700 11px Arial,sans-serif;color:#2e6a80;text-transform:uppercase}}.cover-teaser strong{{font:700 19px/1.2 Georgia,serif}}.cover-teaser small{{margin-top:auto;font:12px Arial,sans-serif;color:#226079}}@media(max-width:760px){{.cover-lead{{grid-template-columns:1fr}}.cover-image{{min-height:230px}}.cover-copy{{padding:20px}}.cover-teasers{{grid-template-columns:1fr}}}}
+</style></head><body><header id="portada"><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header>{navigation}<main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p>{cover}{body}</main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(page)
     print(f'{edition}: {len(chosen)} noticias (objetivo {LIMIT})')
