@@ -3,6 +3,7 @@
 import datetime as dt
 import email.utils
 import html
+import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -32,6 +33,8 @@ FEEDS = [
     ('SINC', 'Ciencia', 'https://www.agenciasinc.es/rss'),
     ('Diario de Burgos', 'Local', 'https://www.diariodeburgos.es/rss'),
     ('Burgos Conecta', 'Local', 'https://www.burgosconecta.es/rss/'),
+    # Google Noticias permite seguir los titulares del medio sin depender de un RSS propio.
+    ('El Correo de Burgos', 'Local', 'https://news.google.com/rss/search?q=site%3Aelcorreodeburgos.com&hl=es&gl=ES&ceid=ES%3Aes'),
 ]
 NS = {
     'media': 'http://search.yahoo.com/mrss/',
@@ -195,6 +198,60 @@ def card(it):
             f'<a class="more" href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">Leer noticia original →</a>'
             f'</div></article>')
 
+def weather_block():
+    """Previsión de Burgos a las 08, 14 y 21, hora peninsular.
+
+    Si Open-Meteo no responde, no bloqueamos la edición de noticias.
+    """
+    url = ('https://api.open-meteo.com/v1/forecast?latitude=42.3439&longitude=-3.6969'
+           '&hourly=temperature_2m,precipitation_probability,weather_code'
+           '&timezone=Europe%2FMadrid&forecast_days=2')
+    try:
+        request = urllib.request.Request(url, headers={'User-Agent': 'CafeActualidad/2.1 (weather)'})
+        with urllib.request.urlopen(request, timeout=12) as response:
+            data = json.load(response)
+        hourly = data['hourly']
+        forecast = {t: i for i, t in enumerate(hourly['time'])}
+        descriptions = {
+            0: ('☀️', 'Despejado'), 1: ('🌤️', 'Poco nuboso'),
+            2: ('⛅', 'Parcialmente nuboso'), 3: ('☁️', 'Cubierto'),
+            45: ('🌫️', 'Niebla'), 48: ('🌫️', 'Niebla helada'),
+            51: ('🌦️', 'Llovizna'), 53: ('🌦️', 'Llovizna'), 55: ('🌧️', 'Llovizna'),
+            56: ('🌧️', 'Llovizna helada'), 57: ('🌧️', 'Llovizna helada'),
+            61: ('🌦️', 'Lluvia débil'), 63: ('🌧️', 'Lluvia'), 65: ('🌧️', 'Lluvia intensa'),
+            66: ('🌧️', 'Lluvia helada'), 67: ('🌧️', 'Lluvia helada'),
+            71: ('🌨️', 'Nieve débil'), 73: ('🌨️', 'Nieve'), 75: ('❄️', 'Nevada intensa'),
+            77: ('❄️', 'Nieve granulada'),
+            80: ('🌦️', 'Chubascos'), 81: ('🌧️', 'Chubascos'), 82: ('⛈️', 'Chubascos fuertes'),
+            85: ('🌨️', 'Chubascos de nieve'), 86: ('❄️', 'Nieve intensa'),
+            95: ('⛈️', 'Tormenta'), 96: ('⛈️', 'Tormenta con granizo'),
+            99: ('⛈️', 'Tormenta con granizo'),
+        }
+        blocks = []
+        for hour in (8, 14, 21):
+            key = f'{NOW.date().isoformat()}T{hour:02d}:00'
+            i = forecast[key]
+            code = int(hourly['weather_code'][i])
+            icon, description = descriptions.get(code, ('🌡️', 'Previsión'))
+            temp = round(float(hourly['temperature_2m'][i]))
+            rain = hourly['precipitation_probability'][i]
+            probability = f'{round(float(rain))} %' if rain is not None else '—'
+            blocks.append(f'<div class="weather-time"><span class="weather-hour">{hour:02d}:00</span>'
+                          f'<span class="weather-icon">{icon}</span>'
+                          f'<strong>{temp} °C</strong><span>{html.escape(description)}</span>'
+                          f'<small>💧 Lluvia: {probability}</small></div>')
+        return ('<section class="weather" aria-label="Previsión meteorológica de Burgos">'
+                '<div class="weather-title">EL TIEMPO EN BURGOS <span>· Previsión de hoy</span></div>'
+                f'<div class="weather-grid">{"".join(blocks)}</div>'
+                '<div class="weather-credit">Fuente: Open-Meteo · Probabilidad de precipitación por hora · '
+                'Previsión, no observaciones en tiempo real.</div></section>')
+    except Exception as exc:
+        print(f'AVISO: previsión meteorológica no disponible: {exc}')
+        return ('<section class="weather weather-unavailable">'
+                '🌦️ Previsión de Burgos temporalmente no disponible. '
+                '<a href="https://www.aemet.es/es/eltiempo/prediccion/municipios/burgos-id09059" '
+                'target="_blank" rel="noopener noreferrer">Consultar AEMET →</a></section>')
+
 def main():
     items = []
     for feed in FEEDS:
@@ -204,6 +261,7 @@ def main():
         raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
     date = NOW.strftime('%d/%m/%Y')
     body = '\n'.join(card(it) for it in chosen)
+    forecast_html = weather_block()
     edition = 'Edición de fin de semana' if WEEKEND else 'Edición diaria'
     page = f'''<!doctype html><html lang="es"><head>
 <link rel="icon" type="image/png" href="icono.png">
@@ -211,7 +269,8 @@ def main():
 <link rel="manifest" href="manifest.json">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>El café de la actualidad · {date}</title><style>
 *{{box-sizing:border-box}}body{{margin:0;background:#f1eee8;color:#222;font-family:Georgia,'Times New Roman',serif}}header{{background:#fff;text-align:center;border-bottom:4px double #1f1f1f;padding:26px 12px}}.tag{{font:700 11px Arial,sans-serif;letter-spacing:3px;color:#3c6575;text-transform:uppercase}}h1{{font-size:clamp(32px,6vw,66px);letter-spacing:-2px;margin:8px 0}}header p{{font:14px Arial,sans-serif;color:#666}}main{{max-width:1320px;margin:0 auto;padding:28px 18px 55px}}.intro{{margin:0 0 23px;border-bottom:1px solid #bbb;padding-bottom:14px;font:15px Arial,sans-serif;line-height:1.6}}.grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}}.card{{background:white;min-width:0;border:1px solid #dcd7cd;box-shadow:0 2px 9px #00000009}}.visual{{height:205px;background:#e6e0d5;overflow:hidden;position:relative}}.visual img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.fallback{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;position:relative;overflow:hidden;background:linear-gradient(135deg,#d9e6e4,#f1e2cb);color:#385d63}}.fallback-glow{{position:absolute;width:260px;height:260px;border:2px solid #ffffff66;border-radius:50%;box-shadow:0 0 0 38px #ffffff24,0 0 0 78px #ffffff19}}.fallback-symbol{{position:relative;font-size:66px;line-height:1.1;filter:drop-shadow(0 4px 5px #00000020)}}.fallback-label{{position:relative;font:700 11px Arial,sans-serif;letter-spacing:2px;text-align:center;padding:0 15px}}.inner{{padding:19px 21px 23px}}.section{{font:700 11px Arial,sans-serif;color:#2e6a80;letter-spacing:1px;text-transform:uppercase}}h2{{font-size:22px;line-height:1.12;margin:10px 0 13px}}h2 a{{text-decoration:none;color:inherit}}h2 a:hover{{color:#235c73}}.card p{{font-size:16px;line-height:1.48}}.note{{font:12px/1.4 Arial,sans-serif!important;color:#777}}.more{{font:700 13px Arial,sans-serif;color:#226079;text-decoration:none}}footer{{text-align:center;padding:25px;font:12px/1.5 Arial,sans-serif;color:#777}}@media(max-width:980px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}main{{padding:18px 12px}}.visual{{height:225px}}h2{{font-size:20px}}}}
-</style></head><body><header><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p></header><main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p><div class="grid">{body}</div></main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
+ .weather{{max-width:850px;margin:16px auto 0;padding:13px 18px;border:1px solid #ded9cf;border-radius:9px;background:#f7f5ef;font-family:Arial,sans-serif;text-align:center}}.weather-title{{font-size:12px;letter-spacing:1.4px;font-weight:700;color:#31586a}}.weather-title span{{font-weight:400;letter-spacing:0;color:#777}}.weather-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}}.weather-time{{display:flex;flex-direction:column;align-items:center;gap:5px;border-right:1px solid #ddd;font-size:12px;color:#555}}.weather-time:last-child{{border-right:0}}.weather-hour{{font-weight:700}}.weather-icon{{font-size:24px}}.weather-time strong{{font-size:19px;color:#222}}.weather-time small{{font-size:11px}}.weather-credit{{font-size:10px;color:#777}}.weather-unavailable{{font-size:12px}}@media(max-width:640px){{.weather{{padding:11px 6px}}.weather-time strong{{font-size:17px}}.weather-time small{{font-size:10px}}}}
+</style></head><body><header><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header><main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p><div class="grid">{body}</div></main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(page)
     print(f'{edition}: {len(chosen)} noticias (objetivo {LIMIT})')
