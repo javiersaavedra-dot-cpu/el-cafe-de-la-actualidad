@@ -252,6 +252,36 @@ def weather_block():
                 '<a href="https://www.aemet.es/es/eltiempo/prediccion/municipios/burgos-id09059" '
                 'target="_blank" rel="noopener noreferrer">Consultar AEMET →</a></section>')
 
+SECTION_ORDER = [
+    ('España', 'España', 'espana'),
+    ('Internacional', 'Mundo', 'mundo'),
+    ('Local', 'Burgos', 'burgos'),
+    ('Sociedad', 'Sociedad', 'sociedad'),
+    ('Deportes', 'Deportes', 'deportes'),
+    ('Cultura', 'Cultura', 'cultura'),
+    ('Ciencia', 'Ciencia', 'ciencia'),
+]
+
+def sections_html(chosen):
+    """Agrupa las noticias por sección y crea destinos para el menú."""
+    output = []
+    for section, label, anchor in SECTION_ORDER:
+        articles = [item for item in chosen if item['section'] == section]
+        if not articles:
+            continue
+        output.append(f'<section class="news-section" id="{anchor}" aria-labelledby="heading-{anchor}">'
+                      f'<div class="section-heading"><h2 id="heading-{anchor}">{label}</h2>'
+                      f'<a href="#portada" class="back-top">↑ Portada</a></div>'
+                      f'<div class="grid">{"".join(card(item) for item in articles)}</div></section>')
+    return '\n'.join(output)
+
+def navigation_html(chosen):
+    links = ['<a href="#portada">Portada</a>']
+    for section, label, anchor in SECTION_ORDER:
+        if any(item['section'] == section for item in chosen):
+            links.append(f'<a href="#{anchor}">{label}</a>')
+    return '<nav class="news-nav" aria-label="Secciones del periódico"><div class="nav-inner">' + ' '.join(links) + '</div></nav>'
+
 def main():
     items = []
     for feed in FEEDS:
@@ -260,7 +290,8 @@ def main():
     if len(chosen) < 5:
         raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
     date = NOW.strftime('%d/%m/%Y')
-    body = '\n'.join(card(it) for it in chosen)
+    body = sections_html(chosen)
+    navigation = navigation_html(chosen)
     forecast_html = weather_block()
     edition = 'Edición de fin de semana' if WEEKEND else 'Edición diaria'
     page = f'''<!doctype html><html lang="es"><head>
@@ -268,9 +299,10 @@ def main():
 <link rel="apple-touch-icon" href="icono.png">
 <link rel="manifest" href="manifest.json">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>El café de la actualidad · {date}</title><style>
-*{{box-sizing:border-box}}body{{margin:0;background:#f1eee8;color:#222;font-family:Georgia,'Times New Roman',serif}}header{{background:#fff;text-align:center;border-bottom:4px double #1f1f1f;padding:26px 12px}}.tag{{font:700 11px Arial,sans-serif;letter-spacing:3px;color:#3c6575;text-transform:uppercase}}h1{{font-size:clamp(32px,6vw,66px);letter-spacing:-2px;margin:8px 0}}header p{{font:14px Arial,sans-serif;color:#666}}main{{max-width:1320px;margin:0 auto;padding:28px 18px 55px}}.intro{{margin:0 0 23px;border-bottom:1px solid #bbb;padding-bottom:14px;font:15px Arial,sans-serif;line-height:1.6}}.grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}}.card{{background:white;min-width:0;border:1px solid #dcd7cd;box-shadow:0 2px 9px #00000009}}.visual{{height:205px;background:#e6e0d5;overflow:hidden;position:relative}}.visual img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.fallback{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;position:relative;overflow:hidden;background:linear-gradient(135deg,#d9e6e4,#f1e2cb);color:#385d63}}.fallback-glow{{position:absolute;width:260px;height:260px;border:2px solid #ffffff66;border-radius:50%;box-shadow:0 0 0 38px #ffffff24,0 0 0 78px #ffffff19}}.fallback-symbol{{position:relative;font-size:66px;line-height:1.1;filter:drop-shadow(0 4px 5px #00000020)}}.fallback-label{{position:relative;font:700 11px Arial,sans-serif;letter-spacing:2px;text-align:center;padding:0 15px}}.inner{{padding:19px 21px 23px}}.section{{font:700 11px Arial,sans-serif;color:#2e6a80;letter-spacing:1px;text-transform:uppercase}}h2{{font-size:22px;line-height:1.12;margin:10px 0 13px}}h2 a{{text-decoration:none;color:inherit}}h2 a:hover{{color:#235c73}}.card p{{font-size:16px;line-height:1.48}}.note{{font:12px/1.4 Arial,sans-serif!important;color:#777}}.more{{font:700 13px Arial,sans-serif;color:#226079;text-decoration:none}}footer{{text-align:center;padding:25px;font:12px/1.5 Arial,sans-serif;color:#777}}@media(max-width:980px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}main{{padding:18px 12px}}.visual{{height:225px}}h2{{font-size:20px}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:#f1eee8;color:#222;font-family:Georgia,'Times New Roman',serif}}html{{scroll-behavior:smooth;scroll-padding-top:70px}}header{{background:#fff;text-align:center;border-bottom:4px double #1f1f1f;padding:26px 12px}}.tag{{font:700 11px Arial,sans-serif;letter-spacing:3px;color:#3c6575;text-transform:uppercase}}h1{{font-size:clamp(32px,6vw,66px);letter-spacing:-2px;margin:8px 0}}header p{{font:14px Arial,sans-serif;color:#666}}main{{max-width:1320px;margin:0 auto;padding:28px 18px 55px}}.intro{{margin:0 0 23px;border-bottom:1px solid #bbb;padding-bottom:14px;font:15px Arial,sans-serif;line-height:1.6}}.grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}}.card{{background:white;min-width:0;border:1px solid #dcd7cd;box-shadow:0 2px 9px #00000009}}.visual{{height:205px;background:#e6e0d5;overflow:hidden;position:relative}}.visual img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.fallback{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;position:relative;overflow:hidden;background:linear-gradient(135deg,#d9e6e4,#f1e2cb);color:#385d63}}.fallback-glow{{position:absolute;width:260px;height:260px;border:2px solid #ffffff66;border-radius:50%;box-shadow:0 0 0 38px #ffffff24,0 0 0 78px #ffffff19}}.fallback-symbol{{position:relative;font-size:66px;line-height:1.1;filter:drop-shadow(0 4px 5px #00000020)}}.fallback-label{{position:relative;font:700 11px Arial,sans-serif;letter-spacing:2px;text-align:center;padding:0 15px}}.inner{{padding:19px 21px 23px}}.section{{font:700 11px Arial,sans-serif;color:#2e6a80;letter-spacing:1px;text-transform:uppercase}}h2{{font-size:22px;line-height:1.12;margin:10px 0 13px}}h2 a{{text-decoration:none;color:inherit}}h2 a:hover{{color:#235c73}}.card p{{font-size:16px;line-height:1.48}}.note{{font:12px/1.4 Arial,sans-serif!important;color:#777}}.more{{font:700 13px Arial,sans-serif;color:#226079;text-decoration:none}}footer{{text-align:center;padding:25px;font:12px/1.5 Arial,sans-serif;color:#777}}@media(max-width:980px){{.grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}main{{padding:18px 12px}}.visual{{height:225px}}h2{{font-size:20px}}}}
+ .news-nav{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:2px solid #252525;box-shadow:0 2px 8px #00000012;font-family:Arial,sans-serif}}.nav-inner{{max-width:1320px;margin:auto;display:flex;gap:4px;align-items:center;overflow-x:auto;white-space:nowrap;padding:0 12px;scrollbar-width:thin}}.news-nav a{{display:inline-block;padding:14px 13px;text-decoration:none;color:#222;font-size:13px;font-weight:700}}.news-nav a:hover,.news-nav a:focus-visible{{background:#eee9df;color:#1b6177}}.news-section{{margin:24px 0 42px;scroll-margin-top:74px}}.section-heading{{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:3px solid #262626;border-bottom:1px solid #bbb;margin:0 0 20px;padding:9px 0}}.section-heading h2{{font:700 clamp(23px,3vw,31px) Georgia,serif;margin:0}}.back-top{{font:12px Arial,sans-serif;color:#31677a;text-decoration:none}}@media(max-width:640px){{.news-nav a{{padding:12px 10px;font-size:12px}}.news-section{{margin-bottom:32px}}}}
  .weather{{max-width:850px;margin:16px auto 0;padding:13px 18px;border:1px solid #ded9cf;border-radius:9px;background:#f7f5ef;font-family:Arial,sans-serif;text-align:center}}.weather-title{{font-size:12px;letter-spacing:1.4px;font-weight:700;color:#31586a}}.weather-title span{{font-weight:400;letter-spacing:0;color:#777}}.weather-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}}.weather-time{{display:flex;flex-direction:column;align-items:center;gap:5px;border-right:1px solid #ddd;font-size:12px;color:#555}}.weather-time:last-child{{border-right:0}}.weather-hour{{font-weight:700}}.weather-icon{{font-size:24px}}.weather-time strong{{font-size:19px;color:#222}}.weather-time small{{font-size:11px}}.weather-credit{{font-size:10px;color:#777}}.weather-unavailable{{font-size:12px}}@media(max-width:640px){{.weather{{padding:11px 6px}}.weather-time strong{{font-size:17px}}.weather-time small{{font-size:10px}}}}
-</style></head><body><header><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header><main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p><div class="grid">{body}</div></main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
+</style></head><body><header id="portada"><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header>{navigation}<main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p>{body}</main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
     with open('index.html', 'w', encoding='utf-8') as f:
         f.write(page)
     print(f'{edition}: {len(chosen)} noticias (objetivo {LIMIT})')
