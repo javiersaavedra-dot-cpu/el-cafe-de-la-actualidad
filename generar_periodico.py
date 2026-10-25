@@ -4,6 +4,7 @@ import datetime as dt
 import email.utils
 import html
 import json
+from html.parser import HTMLParser
 import re
 import unicodedata
 from urllib.parse import quote, urlparse
@@ -141,7 +142,11 @@ def classify(section, title, description):
     if section == 'España' and INTERNATIONAL.search(title) and not re.search(
             r'\b(españa|español|española|madrid|gobierno español)\b', title, re.I):
         return 'Internacional'
+    if section == 'Sociedad' and any(x in t for x in ('portero', 'futbolista', 'real madrid', 'fc barcelona', 'clásico', 'champions')):
+        return 'Deportes'
     if section in ('España', 'Sociedad') and any(x in t for x in science):
+        return 'Ciencia'
+    if section == 'Internacional' and any(x in t for x in ('salud cerebral', 'declive del cerebro', 'investigación científica')):
         return 'Ciencia'
     if section in ('España', 'Sociedad') and any(x in t for x in culture):
         return 'Cultura'
@@ -155,7 +160,9 @@ def clean_title(title, source):
              'El Correo de Burgos', 'Diario de Burgos', 'Burgos Conecta',
              'El País', 'RTVE', '20 Minutos', 'BBC Mundo', 'Xataka', 'SINC',
              'El Mundo', 'elDiario.es', 'El Confidencial', 'Europa Press',
-             'La Vanguardia', 'ABC', 'MARCA', 'AS', 'Mundo Deportivo'}
+             'La Vanguardia', 'ABC', 'MARCA', 'AS', 'Mundo Deportivo',
+             'DW.com', 'Euronews.com', 'Burgosnoticias', 'BURGOSconecta',
+             'Diario AS', 'Diario Público', 'Público', 'El Cultural', 'France 24'}
     for name in sorted(names, key=len, reverse=True):
         if not name:
             continue
@@ -186,39 +193,81 @@ def tidy_summary(title, raw):
     result = ' '.join(kept).strip()
     return result[:950].rsplit(' ', 1)[0] + '…' if len(result) > 950 else result
 
-def article_extra(url):
-    """Intenta recuperar metadescripción pública; si falla, mantiene el RSS."""
+class PageMetadata(HTMLParser):
+    """Extrae únicamente metadatos públicos, nunca inventa un resumen."""
+    def __init__(self):
+        super().__init__()
+        self.meta = {}
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != 'meta':
+            return
+        d = dict(attrs)
+        key = (d.get('property') or d.get('name') or '').lower()
+        if key in ('description', 'og:description', 'twitter:description',
+                   'og:image', 'twitter:image', 'og:title'):
+            self.meta.setdefault(key, plain(d.get('content', '')))
+
+def page_metadata(url):
+    """Consulta metadatos de la URL pública, sin eludir restricciones."""
     try:
-        host = urlparse(url).hostname or ''
-        if not host or host.endswith('google.com'):
-            return ''
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (CafeActualidad; lector RSS)'})
+        host = (urlparse(url).hostname or '').lower()
+        if not host or host.endswith('google.com') or host.endswith('news.google.com'):
+            return {}, url
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; CafeActualidad/4.0)'})
         with urllib.request.urlopen(req, timeout=5) as response:
+            final_url = response.geturl()
             if 'html' not in response.headers.get('Content-Type', '').lower():
-                return ''
-            raw = response.read(180_000).decode('utf-8', 'replace')
-        for pattern in (r'<meta[^>]+(?:name|property)=["\'](?:description|og:description)["\'][^>]+content=["\']([^"\']+)',
-                        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\'](?:description|og:description)["\']'):
-            match = re.search(pattern, raw, re.I)
-            if match:
-                return plain(match.group(1))[:1200]
+                return {}, final_url
+            raw = response.read(220_000).decode('utf-8', 'replace')
+        parser = PageMetadata()
+        parser.feed(raw)
+        return parser.meta, final_url
     except Exception:
-        pass
-    return ''
+        return {}, url
+
+def valid_summary(title, summary):
+    """Rechaza texto vacío, idéntico al título o aparentemente ajeno."""
+    text = tidy_summary(title, summary)
+    if len(text) < 65:
+        return ''
+    a, b = normalize(title), normalize(text)
+    # Dos términos coincidentes o un nombre significativo son señal mínima;
+    # evita publicar descripciones de otra noticia (no garantiza exactitud).
+    if len(a & b) < 2 and len(a & b) / max(1, len(a)) < .2:
+        return ''
+    return text
 
 def enrich(items):
-    """Enriquece solo las noticias elegidas; sin peticiones masivas a los medios."""
+    """Metadescripciones e imágenes solo si se pueden verificar razonablemente."""
+    counters = defaultdict(int)
     for it in items:
         original = it['description']
-        extra = article_extra(it['link']) if len(original) < 380 else ''
-        if extra:
-            # Analizar también la metadescripción aunque el RSS sea repetitivo.
-            # tidy_summary descartará las frases duplicadas.
-            original = (original.rstrip(' .') + '. ' + extra).strip('. ')
-        improved = tidy_summary(it['title'], original)
-        # Nunca recuperar como alternativa el RSS original si repite el titular.
-        # Es preferible una indicación transparente a una repetición en pantalla y audio.
-        it['description'] = improved or 'No hay un resumen adicional disponible. Puedes consultar la noticia completa en el medio original.'
+        summary = valid_summary(it['title'], original)
+        metadata = {}
+        if not summary or not it['image']:
+            metadata, _ = page_metadata(it['link'])
+        if not summary:
+            for key in ('og:description', 'description', 'twitter:description'):
+                summary = valid_summary(it['title'], metadata.get(key, ''))
+                if summary:
+                    break
+        if not it['image']:
+            candidate = metadata.get('og:image') or metadata.get('twitter:image', '')
+            if candidate.startswith('https://'):
+                it['image'] = candidate
+                counters['fotos_recuperadas'] += 1
+        if summary:
+            it['description'] = summary
+            counters['resumenes'] += 1
+        else:
+            it['description'] = ('Resumen no disponible en la fuente pública. '
+                                 'Consulta el artículo original para ampliar la noticia.')
+            counters['sin_resumen'] += 1
+    print('=== CALIDAD EDITORIAL ===')
+    print(f'Resúmenes útiles: {counters["resumenes"]}; sin resumen: {counters["sin_resumen"]}; '
+          f'fotos recuperadas: {counters["fotos_recuperadas"]}')
+    print('NOTA: Google Noticias puede enlazar a páginas intermediarias; no siempre permite recuperar metadatos.')
 
 
 def fetch(source, section, url):
@@ -327,6 +376,10 @@ def choose(items):
             by_section_source[(it['section'], source_group(it['source']))],
             by_source[source_group(it['source'])],
             source_priority(it['source']),
+            # RSS directos suelen incluir imágenes y descripciones más completas.
+            0 if len(it['description']) >= 110 and it['image'] else
+            1 if len(it['description']) >= 110 else
+            2 if it['image'] else 3,
             -it['published'].timestamp()))
 
     # Cupos: primera ronda un artículo por fuente y sección, luego segunda, etc.
