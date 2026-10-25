@@ -20,32 +20,54 @@ LIMIT = BASE_LIMIT + 1  # Una plaza adicional solo si hay noticia reciente de co
 
 # RSS públicos: algunos medios cambian sus direcciones o bloquean las peticiones.
 # Un feed que falle no impide generar el periódico con el resto.
+def google_news(query):
+    """RSS público de Google Noticias, sin claves ni servicios de pago."""
+    return ('https://news.google.com/rss/search?q=' + quote(query)
+            + '&hl=es&gl=ES&ceid=ES%3Aes')
+
+# Los canales directos fallidos de RTVE/SINC/medios burgaleses se sustituyen
+# provisionalmente por búsquedas por dominio. No se presupone que estén activos.
 FEEDS = [
-    ('RTVE España', 'España', 'https://www.rtve.es/rss/temas_noticias.xml'),
-    ('RTVE Internacional', 'Internacional', 'https://www.rtve.es/rss/temas_internacional.xml'),
-    ('RTVE Sociedad', 'Sociedad', 'https://www.rtve.es/rss/temas_sociedad.xml'),
-    ('RTVE Cultura', 'Cultura', 'https://www.rtve.es/rss/temas_cultura.xml'),
-    ('RTVE Deportes', 'Deportes', 'https://www.rtve.es/rss/temas_deportes.xml'),
-    ('RTVE Ciencia', 'Ciencia', 'https://www.rtve.es/rss/temas_ciencia.xml'),
-    ('RTVE Tecnología', 'Ciencia', 'https://www.rtve.es/rss/temas_tecnologia.xml'),
+    ('RTVE España', 'España', google_news('site:rtve.es/noticias/ España')),
+    ('RTVE Internacional', 'Internacional', google_news('site:rtve.es/noticias/ internacional')),
+    ('RTVE Sociedad', 'Sociedad', google_news('site:rtve.es/noticias/ sociedad')),
+    ('RTVE Cultura', 'Cultura', google_news('site:rtve.es/noticias/ cultura')),
+    ('RTVE Deportes', 'Deportes', google_news('site:rtve.es/deportes/')),
+    ('RTVE Ciencia', 'Ciencia', google_news('site:rtve.es/noticias/ ciencia')),
     ('El País portada', 'España', 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada'),
     ('El País Internacional', 'Internacional', 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/internacional/portada'),
     ('BBC Mundo', 'Internacional', 'https://feeds.bbci.co.uk/mundo/rss.xml'),
-    # Fuentes complementarias por Google Noticias. Se comprueba su rendimiento en Actions.
-    ('ABC', 'España', 'https://news.google.com/rss/search?q=' + quote('site:abc.es') + '&hl=es&gl=ES&ceid=ES%3Aes'),
-    ('La Vanguardia', 'España', 'https://news.google.com/rss/search?q=' + quote('site:lavanguardia.com') + '&hl=es&gl=ES&ceid=ES%3Aes'),
-    ('Europa Press', 'España', 'https://news.google.com/rss/search?q=' + quote('site:europapress.es') + '&hl=es&gl=ES&ceid=ES%3Aes'),
+    ('ABC', 'España', google_news('site:abc.es')),
+    ('La Vanguardia', 'España', google_news('site:lavanguardia.com')),
+    ('Europa Press', 'España', google_news('site:europapress.es')),
+    ('El Mundo', 'España', google_news('site:elmundo.es')),
+    ('elDiario.es', 'España', google_news('site:eldiario.es')),
+    ('El Confidencial', 'España', google_news('site:elconfidencial.com')),
+    ('DW Español', 'Internacional', google_news('site:dw.com/es/')),
+    ('France 24', 'Internacional', google_news('site:france24.com/es/')),
+    ('Euronews', 'Internacional', google_news('site:es.euronews.com')),
+    ('Europa Press Sociedad', 'Sociedad', google_news('site:europapress.es/sociedad/')),
+    ('elDiario.es Sociedad', 'Sociedad', google_news('site:eldiario.es/sociedad/')),
+    ('Público', 'Sociedad', google_news('site:publico.es sociedad')),
     ('20 Minutos', 'Sociedad', 'https://www.20minutos.es/rss/'),
     ('Xataka', 'Ciencia', 'https://www.xataka.com/index.xml'),
-    ('SINC', 'Ciencia', 'https://www.agenciasinc.es/rss'),
-    ('Diario de Burgos', 'Local', 'https://www.diariodeburgos.es/rss'),
-    ('Burgos Conecta', 'Local', 'https://www.burgosconecta.es/rss/'),
-    # Google Noticias permite seguir los titulares del medio sin depender de un RSS propio.
-    ('El Correo de Burgos', 'Local', 'https://news.google.com/rss/search?q=site%3Aelcorreodeburgos.com&hl=es&gl=ES&ceid=ES%3Aes'),
+    ('SINC', 'Ciencia', google_news('site:agenciasinc.es')),
+    ('CSIC', 'Ciencia', google_news('site:csic.es ciencia investigación')),
+    ('National Geographic', 'Ciencia', google_news('site:nationalgeographic.com.es ciencia')),
+    ('Muy Interesante', 'Ciencia', google_news('site:muyinteresante.com ciencia')),
+    ('Europa Press Cultura', 'Cultura', google_news('site:europapress.es/cultura/')),
+    ('El Cultural', 'Cultura', google_news('site:elespanol.com/el-cultural/')),
+    ('MARCA', 'Deportes', google_news('site:marca.com')),
+    ('AS', 'Deportes', google_news('site:as.com')),
+    ('Mundo Deportivo', 'Deportes', google_news('site:mundodeportivo.com')),
+    ('Diario de Burgos', 'Local', google_news('site:diariodeburgos.es')),
+    ('Burgos Conecta', 'Local', google_news('site:burgosconecta.es')),
+    ('El Correo de Burgos', 'Local', google_news('site:elcorreodeburgos.com')),
+    ('Burgos Noticias', 'Local', google_news('site:burgosnoticias.com')),
     ('Cofradías Burgos · Google Noticias', 'Cofradías',
-     'https://news.google.com/rss/search?q=' + quote('cofradía OR cofradías OR semana santa OR virgen de la alegría Burgos')
-     + '&hl=es&gl=ES&ceid=ES%3Aes'),
+     google_news('cofradía OR cofradías OR semana santa OR virgen de la alegría Burgos')),
 ]
+
 NS = {
     'media': 'http://search.yahoo.com/mrss/',
     'content': 'http://purl.org/rss/1.0/modules/content/',
@@ -131,7 +153,9 @@ def clean_title(title, source):
     title = plain(title)
     names = {source, source.replace(' · Google Noticias', ''),
              'El Correo de Burgos', 'Diario de Burgos', 'Burgos Conecta',
-             'El País', 'RTVE', '20 Minutos', 'BBC Mundo', 'Xataka', 'SINC'}
+             'El País', 'RTVE', '20 Minutos', 'BBC Mundo', 'Xataka', 'SINC',
+             'El Mundo', 'elDiario.es', 'El Confidencial', 'Europa Press',
+             'La Vanguardia', 'ABC', 'MARCA', 'AS', 'Mundo Deportivo'}
     for name in sorted(names, key=len, reverse=True):
         if not name:
             continue
@@ -254,12 +278,16 @@ def source_group(source):
         return 'RTVE'
     if source.startswith('El País '):
         return 'El País'
+    if source.startswith('Europa Press '):
+        return 'Europa Press'
+    if source.startswith('elDiario.es '):
+        return 'elDiario.es'
     return source
 
 
 def source_priority(source):
     # Preferencia suave, no veto: el acceso puede variar por artículo.
-    return 1 if source_group(source) == 'El País' else 0
+    return 1 if source_group(source) in ('El País', 'El Mundo', 'El Confidencial') else 0
 
 
 def choose(items):
