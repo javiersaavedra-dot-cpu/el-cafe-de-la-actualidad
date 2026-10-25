@@ -29,6 +29,12 @@ def google_news(query):
 # Los canales directos fallidos de RTVE/SINC/medios burgaleses se sustituyen
 # provisionalmente por búsquedas por dominio. No se presupone que estén activos.
 FEEDS = [
+    # Fuentes directas: preferidas cuando ofrecen descripciones e imágenes.
+    ('elDiario.es RSS', 'España', 'https://www.eldiario.es/rss/'),
+    ('DW RSS', 'Internacional', 'https://rss.dw.com/rdf/rss-sp-all'),
+    ('Euronews RSS', 'Internacional', 'https://es.euronews.com/rss'),
+    ('France 24 RSS', 'Internacional', 'https://www.france24.com/es/rss'),
+
     ('RTVE España', 'España', google_news('site:rtve.es/noticias/ España')),
     ('RTVE Internacional', 'Internacional', google_news('site:rtve.es/noticias/ internacional')),
     ('RTVE Sociedad', 'Sociedad', google_news('site:rtve.es/noticias/ sociedad')),
@@ -227,47 +233,63 @@ def page_metadata(url):
         return {}, url
 
 def valid_summary(title, summary):
-    """Rechaza texto vacío, idéntico al título o aparentemente ajeno."""
+    """Conserva textos sustanciales sin exigir repetición literal del titular."""
     text = tidy_summary(title, summary)
-    if len(text) < 65:
+    if len(text) < 75 or len(normalize(text)) < 9:
         return ''
-    a, b = normalize(title), normalize(text)
-    # Dos términos coincidentes o un nombre significativo son señal mínima;
-    # evita publicar descripciones de otra noticia (no garantiza exactitud).
-    if len(a & b) < 2 and len(a & b) / max(1, len(a)) < .2:
+    if similar(title, text) and len(text) < len(title) * 1.45:
+        return ''
+    if re.search(r'(?i)(suscr[ií]bete|aceptar cookies|inicia sesi[oó]n|todos los derechos reservados)', text):
         return ''
     return text
 
-def enrich(items):
-    """Metadescripciones e imágenes solo si se pueden verificar razonablemente."""
-    counters = defaultdict(int)
+
+def quality_enrich(items):
+    """Evalúa contenido ANTES de elegir. Limita peticiones para no agotar Actions."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    # Orden inicial: RSS con resumen y foto, después RSS con resumen, después el resto.
+    def prelim(it):
+        direct = 'news.google.com' not in urlparse(it['link']).netloc
+        return (int(direct), int(bool(valid_summary(it['title'], it['description']))),
+                int(bool(it['image'])), it['published'].timestamp())
+    # Preselección equilibrada por sección, no solo las noticias más recientes.
+    by_section = defaultdict(list)
     for it in items:
-        original = it['description']
-        summary = valid_summary(it['title'], original)
-        metadata = {}
-        if not summary or not it['image']:
-            metadata, _ = page_metadata(it['link'])
-        if not summary:
-            for key in ('og:description', 'description', 'twitter:description'):
-                summary = valid_summary(it['title'], metadata.get(key, ''))
-                if summary:
-                    break
-        if not it['image']:
-            candidate = metadata.get('og:image') or metadata.get('twitter:image', '')
-            if candidate.startswith('https://'):
-                it['image'] = candidate
-                counters['fotos_recuperadas'] += 1
-        if summary:
-            it['description'] = summary
-            counters['resumenes'] += 1
-        else:
-            it['description'] = ('Resumen no disponible en la fuente pública. '
-                                 'Consulta el artículo original para ampliar la noticia.')
-            counters['sin_resumen'] += 1
-    print('=== CALIDAD EDITORIAL ===')
-    print(f'Resúmenes útiles: {counters["resumenes"]}; sin resumen: {counters["sin_resumen"]}; '
-          f'fotos recuperadas: {counters["fotos_recuperadas"]}')
-    print('NOTA: Google Noticias puede enlazar a páginas intermediarias; no siempre permite recuperar metadatos.')
+        if it['section'] != 'Descartar':
+            by_section[it['section']].append(it)
+    candidates = []
+    for section, pool in by_section.items():
+        pool.sort(key=prelim, reverse=True)
+        # Candidatos suficientes por sección; se evalúan solo unos pocos enlaces
+        # para evitar cientos de peticiones web y ejecuciones de muchos minutos.
+        candidates.extend(pool[:max(10, QUOTAS.get(section, 1) * 4)])
+    def process(it):
+        it = it.copy()
+        it['description'] = valid_summary(it['title'], it['description'])
+        # Solo consultar la web original; no confiar en descripciones de Google News.
+        if 'news.google.com' not in urlparse(it['link']).netloc and (not it['description'] or not it['image']):
+            meta, _ = page_metadata(it['link'])
+            if not it['description']:
+                for key in ('og:description', 'description', 'twitter:description'):
+                    candidate = valid_summary(it['title'], meta.get(key, ''))
+                    if candidate:
+                        it['description'] = candidate
+                        break
+            if not it['image']:
+                candidate = meta.get('og:image') or meta.get('twitter:image', '')
+                if candidate.startswith('https://'):
+                    it['image'] = candidate
+        it['quality'] = int(bool(it['description'])) * 4 + int(bool(it['image']))
+        return it
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(process, candidates))
+    counts = defaultdict(int)
+    for it in results:
+        counts[it['section']] += bool(it['description'])
+    print('=== CANDIDATAS CON CONTENIDO COMPROBADO ===')
+    for section in QUOTAS:
+        print(f'{section}: {counts[section]} candidatas con resumen')
+    return results
 
 
 def fetch(source, section, url):
@@ -373,6 +395,7 @@ def choose(items):
         # Menos representados primero; dentro del mismo nivel, noticias más
         # recientes y medios normalmente abiertos antes que El País.
         return sorted(candidates, key=lambda it: (
+            0 if it.get('description') else 1,
             by_section_source[(it['section'], source_group(it['source']))],
             by_source[source_group(it['source'])],
             source_priority(it['source']),
@@ -452,12 +475,12 @@ def card(it):
     img = (f'<img loading="lazy" referrerpolicy="no-referrer" src="{e(it["image"])}" '
            f'alt="Imagen proporcionada por {e(it["source"])}" '
            f'onerror="this.style.display=\'none\'">' if it['image'] else '')
-    excerpt = it['description'] or 'Consulta la noticia completa en el medio de origen.'
+    excerpt = it['description']
     return (f'<article id="noticia-{it.get("story_id", 0)}" class="card"><div class="visual">{fallback}{img}</div><div class="inner">'
             f'<div class="section">{e(it["section"])} · {e(it["source"])}</div>'
             f'<h2><a href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">{e(it["title"])}</a></h2>'
-            f'<p>{e(excerpt)}</p><p class="note">Texto elaborado a partir de la descripción RSS y, cuando es accesible, la metadescripción del artículo; puede ser breve. '
-            f'La fotografía, si aparece, procede del feed original. Las ilustraciones son decorativas.</p>'
+            f'{"<p>" + e(excerpt) + "</p>" if excerpt else ""}<p class="note">Texto elaborado a partir de la descripción RSS y, cuando es accesible, la metadescripción del artículo; puede ser breve. '
+            f'La fotografía, si aparece, procede del medio original o de su feed. Las ilustraciones son decorativas.</p>'
             f'<a class="more" href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">Leer noticia original →</a>'
             f'</div></article>')
 
@@ -605,9 +628,12 @@ def main():
     items = []
     for feed in FEEDS:
         items.extend(fetch(*feed))
-    chosen = choose(items)
-    print_source_report(items, chosen)
-    enrich(chosen)
+    evaluated = quality_enrich(items)
+    chosen = choose(evaluated)
+    print_source_report(evaluated, chosen)
+    useful = sum(bool(it['description']) for it in chosen)
+    photos = sum(bool(it['image']) for it in chosen)
+    print(f'=== CALIDAD EDITORIAL FINAL === Resúmenes útiles: {useful}/{len(chosen)}; fotos: {photos}/{len(chosen)}')
     if len(chosen) < 5:
         raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
     date = NOW.strftime('%d/%m/%Y')
@@ -634,7 +660,7 @@ def main():
     chunks = ['Bienvenidos a El café de la actualidad. Estas son las noticias del día.']
     for index, item in enumerate(spoken, 1):
         chunks.append(f'Noticia {index}. {item["section"]}. {item["title"]}. '
-                      + (item['description'] or 'Consulta el medio original para ampliar esta noticia.'))
+                      + (item['description'] or ''))
     chunks.append('Hasta aquí El café de la actualidad. Gracias por escucharnos.')
     with open('guion_audio.txt', 'w', encoding='utf-8') as f:
         f.write('\n\n'.join(chunks))
