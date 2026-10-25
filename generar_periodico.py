@@ -29,48 +29,27 @@ def google_news(query):
 # Los canales directos fallidos de RTVE/SINC/medios burgaleses se sustituyen
 # provisionalmente por búsquedas por dominio. No se presupone que estén activos.
 FEEDS = [
-    # Fuentes directas: preferidas cuando ofrecen descripciones e imágenes.
+    # Pocos medios: priorizar RSS directos con texto e imagen cuando existan.
     ('elDiario.es RSS', 'España', 'https://www.eldiario.es/rss/'),
+    ('BBC Mundo', 'Internacional', 'https://feeds.bbci.co.uk/mundo/rss.xml'),
     ('DW RSS', 'Internacional', 'https://rss.dw.com/rdf/rss-sp-all'),
     ('Euronews RSS', 'Internacional', 'https://es.euronews.com/rss'),
     ('France 24 RSS', 'Internacional', 'https://www.france24.com/es/rss'),
-
-    ('RTVE España', 'España', google_news('site:rtve.es/noticias/ España')),
-    ('RTVE Internacional', 'Internacional', google_news('site:rtve.es/noticias/ internacional')),
-    ('RTVE Sociedad', 'Sociedad', google_news('site:rtve.es/noticias/ sociedad')),
-    ('RTVE Cultura', 'Cultura', google_news('site:rtve.es/noticias/ cultura')),
-    ('RTVE Deportes', 'Deportes', google_news('site:rtve.es/deportes/')),
-    ('RTVE Ciencia', 'Ciencia', google_news('site:rtve.es/noticias/ ciencia')),
-    ('El País portada', 'España', 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada'),
-    ('El País Internacional', 'Internacional', 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/internacional/portada'),
-    ('BBC Mundo', 'Internacional', 'https://feeds.bbci.co.uk/mundo/rss.xml'),
-    ('ABC', 'España', google_news('site:abc.es')),
-    ('La Vanguardia', 'España', google_news('site:lavanguardia.com')),
-    ('Europa Press', 'España', google_news('site:europapress.es')),
-    ('El Mundo', 'España', google_news('site:elmundo.es')),
-    ('elDiario.es', 'España', google_news('site:eldiario.es')),
-    ('El Confidencial', 'España', google_news('site:elconfidencial.com')),
-    ('DW Español', 'Internacional', google_news('site:dw.com/es/')),
-    ('France 24', 'Internacional', google_news('site:france24.com/es/')),
-    ('Euronews', 'Internacional', google_news('site:es.euronews.com')),
-    ('Europa Press Sociedad', 'Sociedad', google_news('site:europapress.es/sociedad/')),
-    ('elDiario.es Sociedad', 'Sociedad', google_news('site:eldiario.es/sociedad/')),
-    ('Público', 'Sociedad', google_news('site:publico.es sociedad')),
     ('20 Minutos', 'Sociedad', 'https://www.20minutos.es/rss/'),
     ('Xataka', 'Ciencia', 'https://www.xataka.com/index.xml'),
-    ('SINC', 'Ciencia', google_news('site:agenciasinc.es')),
-    ('CSIC', 'Ciencia', google_news('site:csic.es ciencia investigación')),
-    ('National Geographic', 'Ciencia', google_news('site:nationalgeographic.com.es ciencia')),
-    ('Muy Interesante', 'Ciencia', google_news('site:muyinteresante.com ciencia')),
-    ('Europa Press Cultura', 'Cultura', google_news('site:europapress.es/cultura/')),
-    ('El Cultural', 'Cultura', google_news('site:elespanol.com/el-cultural/')),
-    ('MARCA', 'Deportes', google_news('site:marca.com')),
-    ('AS', 'Deportes', google_news('site:as.com')),
-    ('Mundo Deportivo', 'Deportes', google_news('site:mundodeportivo.com')),
-    ('Diario de Burgos', 'Local', google_news('site:diariodeburgos.es')),
-    ('Burgos Conecta', 'Local', google_news('site:burgosconecta.es')),
+    # Estos RSS pueden fallar; si lo hacen, se omiten sin interrumpir la edición.
+    ('RTVE España', 'España', 'https://www.rtve.es/rss/temas_noticias.xml'),
+    ('RTVE Internacional', 'Internacional', 'https://www.rtve.es/rss/temas_internacional.xml'),
+    ('RTVE Sociedad', 'Sociedad', 'https://www.rtve.es/rss/temas_sociedad.xml'),
+    ('RTVE Cultura', 'Cultura', 'https://www.rtve.es/rss/temas_cultura.xml'),
+    ('RTVE Deportes', 'Deportes', 'https://www.rtve.es/rss/temas_deportes.xml'),
+    ('RTVE Ciencia', 'Ciencia', 'https://www.rtve.es/rss/temas_ciencia.xml'),
+    ('SINC', 'Ciencia', 'https://www.agenciasinc.es/rss'),
+    ('Burgos Conecta', 'Local', 'https://www.burgosconecta.es/rss/'),
+    ('Diario de Burgos', 'Local', 'https://www.diariodeburgos.es/rss'),
+    # Google Noticias solo como respaldo local y para cofradías; puede traer
+    # titulares sin resumen ni fotografía, que no pasarán el filtro editorial.
     ('El Correo de Burgos', 'Local', google_news('site:elcorreodeburgos.com')),
-    ('Burgos Noticias', 'Local', google_news('site:burgosnoticias.com')),
     ('Cofradías Burgos · Google Noticias', 'Cofradías',
      google_news('cofradía OR cofradías OR semana santa OR virgen de la alegría Burgos')),
 ]
@@ -103,13 +82,31 @@ def first_text(item, tags):
     return ''
 
 def image_url(item):
+    """Busca imágenes RSS y también las insertadas en HTML de descripción."""
     for path in ('media:content', 'media:thumbnail', 'enclosure'):
         for el in item.findall(path, NS):
             url = el.attrib.get('url', '')
             kind = el.attrib.get('type', '')
-            if url.startswith('https://') and (path != 'enclosure' or kind.startswith('image/')):
+            if url.startswith('https://') and (path != 'enclosure' or
+                   kind.startswith('image/') or re.search(r'\.(?:jpe?g|png|webp)(?:\?|$)', url, re.I)):
                 return url
+    for tag in ('content:encoded', 'description', 'summary'):
+        raw = first_text(item, [tag])
+        match = re.search(r'<img\b[^>]*\bsrc=["\'](https://[^"\']+)', raw, re.I)
+        if match:
+            return html.unescape(match.group(1))
     return ''
+
+def best_description(item, title):
+    """Elige la descripción útil más completa, no el primer campo del RSS."""
+    options = []
+    for tag in ('description', 'summary', 'atom:summary', 'content:encoded', 'atom:content'):
+        raw = first_text(item, [tag])
+        if raw:
+            candidate = valid_summary(title, raw)
+            if candidate:
+                options.append(candidate)
+    return max(options, key=len, default='')
 
 # La detección internacional se limita a titulares explícitos, para no convertir
 # en «Mundo» noticias españolas que mencionen un país de forma secundaria.
@@ -289,7 +286,7 @@ def quality_enrich(items):
     print('=== CANDIDATAS CON CONTENIDO COMPROBADO ===')
     for section in QUOTAS:
         print(f'{section}: {counts[section]} candidatas con resumen')
-    return results
+    return [it for it in results if it['description']]
 
 
 def fetch(source, section, url):
@@ -306,7 +303,7 @@ def fetch(source, section, url):
             if not link:
                 lk = it.find('atom:link', NS)
                 link = lk.attrib.get('href', '') if lk is not None else ''
-            description = plain(first_text(it, ['description', 'summary', 'atom:summary', 'content:encoded']))
+            description = best_description(it, title)
             published = first_text(it, ['pubDate', 'published', 'atom:updated', 'atom:published'])
             try:
                 when = email.utils.parsedate_to_datetime(published)
@@ -429,7 +426,7 @@ def choose(items):
             if not progress:
                 break
 
-    if special:
+    if special and special.get('description'):
         selected.append(special)
     return sorted(selected, key=lambda x: x['published'], reverse=True)
 
@@ -635,7 +632,7 @@ def main():
     photos = sum(bool(it['image']) for it in chosen)
     print(f'=== CALIDAD EDITORIAL FINAL === Resúmenes útiles: {useful}/{len(chosen)}; fotos: {photos}/{len(chosen)}')
     if len(chosen) < 5:
-        raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
+        raise SystemExit('Menos de cinco noticias con resumen útil: se conserva la edición anterior.')
     date = NOW.strftime('%d/%m/%Y')
     for i, item in enumerate(chosen):
         item['story_id'] = i + 1
