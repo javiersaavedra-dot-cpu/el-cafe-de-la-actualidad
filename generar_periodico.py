@@ -121,6 +121,19 @@ def classify(section, title, description):
         return 'Cultura'
     return section
 
+# Los RSS agregados pueden añadir el nombre del medio al final del titular.
+# El medio ya aparece en la etiqueta de la tarjeta: no repetirlo ni leerlo en voz alta.
+def clean_title(title, source):
+    title = plain(title)
+    names = {source, source.replace(' · Google Noticias', ''),
+             'El Correo de Burgos', 'Diario de Burgos', 'Burgos Conecta',
+             'El País', 'RTVE', '20 Minutos', 'BBC Mundo', 'Xataka', 'SINC'}
+    for name in sorted(names, key=len, reverse=True):
+        if not name:
+            continue
+        title = re.sub(r'\s+[-–—|]\s+' + re.escape(name) + r'\s*$', '', title, flags=re.I)
+    return title.strip()
+
 # Los textos se construyen solo con información disponible, sin inventar contexto.
 def tidy_summary(title, raw):
     text = plain(raw)
@@ -170,11 +183,14 @@ def enrich(items):
     for it in items:
         original = it['description']
         extra = article_extra(it['link']) if len(original) < 380 else ''
-        if extra and not similar(original, extra):
-            original = (original + '. ' + extra).strip('. ')
+        if extra:
+            # Analizar también la metadescripción aunque el RSS sea repetitivo.
+            # tidy_summary descartará las frases duplicadas.
+            original = (original.rstrip(' .') + '. ' + extra).strip('. ')
         improved = tidy_summary(it['title'], original)
-        # Si no hay material nuevo, mostrar el RSS en lugar de fingir un resumen.
-        it['description'] = improved or plain(it['description'])[:650]
+        # Nunca recuperar como alternativa el RSS original si repite el titular.
+        # Es preferible una indicación transparente a una repetición en pantalla y audio.
+        it['description'] = improved or 'No hay un resumen adicional disponible. Puedes consultar la noticia completa en el medio original.'
 
 
 def fetch(source, section, url):
@@ -186,7 +202,7 @@ def fetch(source, section, url):
         items = root.findall('.//item') or root.findall('.//atom:entry', NS)
         result = []
         for it in items[:45]:
-            title = plain(first_text(it, ['title', 'atom:title']))
+            title = clean_title(first_text(it, ['title', 'atom:title']), source)
             link = first_text(it, ['link'])
             if not link:
                 lk = it.find('atom:link', NS)
