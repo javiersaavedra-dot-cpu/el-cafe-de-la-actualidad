@@ -5,6 +5,8 @@ import email.utils
 import html
 import json
 import re
+import unicodedata
+from urllib.parse import quote, urlparse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -13,7 +15,8 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo('Europe/Madrid')
 NOW = dt.datetime.now(TZ)
 WEEKEND = NOW.weekday() >= 5
-LIMIT = 24 if WEEKEND else 18
+BASE_LIMIT = 24 if WEEKEND else 18
+LIMIT = BASE_LIMIT + 1  # Una plaza adicional solo si hay noticia reciente de cofradías
 
 # RSS públicos: algunos medios cambian sus direcciones o bloquean las peticiones.
 # Un feed que falle no impide generar el periódico con el resto.
@@ -35,6 +38,9 @@ FEEDS = [
     ('Burgos Conecta', 'Local', 'https://www.burgosconecta.es/rss/'),
     # Google Noticias permite seguir los titulares del medio sin depender de un RSS propio.
     ('El Correo de Burgos', 'Local', 'https://news.google.com/rss/search?q=site%3Aelcorreodeburgos.com&hl=es&gl=ES&ceid=ES%3Aes'),
+    ('Cofradías Burgos · Google Noticias', 'Cofradías',
+     'https://news.google.com/rss/search?q=' + quote('cofradía OR cofradías OR semana santa OR virgen de la alegría Burgos')
+     + '&hl=es&gl=ES&ceid=ES%3Aes'),
 ]
 NS = {
     'media': 'http://search.yahoo.com/mrss/',
@@ -72,8 +78,27 @@ def image_url(item):
                 return url
     return ''
 
+# La detección internacional se limita a titulares explícitos, para no convertir
+# en «Mundo» noticias españolas que mencionen un país de forma secundaria.
+INTERNATIONAL = re.compile(
+    r'\b(francia|francés|francesa|parís|alemania|berlín|italia|roma|reino unido|'
+    r'londres|portugal|lisboa|ucrania|rusia|moscú|estados unidos|ee\.?\s?uu\.?|'
+    r'washington|china|pekín|japón|tokio|israel|gaza|palestina|irán|irak|'
+    r'argentina|brasil|méxico|venezuela|colombia|chile|perú|canadá|'
+    r'bruselas|unión europea|otan)\b', re.I)
+COFRADIA_TERMS = re.compile(
+    r'cofrad[ií]a|hermandad|semana santa|procesi[oó]n|virgen de la alegr[ií]a|'
+    r'paso procesional|junta de semana santa|santo entierro', re.I)
+BURGOS_TERMS = re.compile(r'burgos|burgales[ae]s?|castilla y le[oó]n', re.I)
+ALEGRIA_TERMS = re.compile(r'(virgen|señora|cofrad[ií]a).{0,32}alegr[ií]a', re.I)
+
+def is_cofradia(title, description, link=''):
+    text = title + ' ' + description[:400]
+    return bool(COFRADIA_TERMS.search(text) and
+                (BURGOS_TERMS.search(text) or ALEGRIA_TERMS.search(text)))
+
 def classify(section, title, description):
-    """Reclasifica titulares evidentes; no inventa noticias ni su contenido."""
+    """Clasifica por contenido sin confundir la procedencia del RSS con el tema."""
     t = (title + ' ' + description[:180]).lower()
     science = ('investigación', 'científic', 'astronom', 'nasa', 'espacial',
                'descubrimient', 'universo', 'arqueolog', 'fósil', 'inteligencia artificial')
@@ -81,13 +106,76 @@ def classify(section, title, description):
                'festival', 'concierto', 'patrimonio', 'historia del')
     local = ('burgos', 'castilla y león', 'valladolid', 'palencia', 'soria', 'segovia',
              'salamanca', 'zamora', 'ávila', 'león')
+    if is_cofradia(title, description):
+        return 'Cofradías'
+    if section == 'Cofradías':
+        return 'Descartar'  # Evita noticias de cofradías de otras provincias.
     if section in ('España', 'Sociedad') and any(x in t for x in local):
         return 'Local'
+    if section == 'España' and INTERNATIONAL.search(title) and not re.search(
+            r'\b(españa|español|española|madrid|gobierno español)\b', title, re.I):
+        return 'Internacional'
     if section in ('España', 'Sociedad') and any(x in t for x in science):
         return 'Ciencia'
     if section in ('España', 'Sociedad') and any(x in t for x in culture):
         return 'Cultura'
     return section
+
+# Los textos se construyen solo con información disponible, sin inventar contexto.
+def tidy_summary(title, raw):
+    text = plain(raw)
+    text = re.sub(r'(?i)^(leer m[aá]s|seguir leyendo|actualizado):?\s*', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    title_words = normalize(title)
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9¿¡])', text)
+    kept = []
+    for sentence in sentences:
+        sentence = sentence.strip(' -·|')
+        if len(sentence) < 25:
+            continue
+        words = normalize(sentence)
+        overlap = len(words & title_words) / max(1, min(len(words), len(title_words)))
+        if overlap > .86 and len(sentence) < 175:
+            continue
+        if any(similar(sentence, old) for old in kept):
+            continue
+        kept.append(sentence)
+        if len(' '.join(kept)) >= 720:
+            break
+    result = ' '.join(kept).strip()
+    return result[:950].rsplit(' ', 1)[0] + '…' if len(result) > 950 else result
+
+def article_extra(url):
+    """Intenta recuperar metadescripción pública; si falla, mantiene el RSS."""
+    try:
+        host = urlparse(url).hostname or ''
+        if not host or host.endswith('google.com'):
+            return ''
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (CafeActualidad; lector RSS)'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            if 'html' not in response.headers.get('Content-Type', '').lower():
+                return ''
+            raw = response.read(180_000).decode('utf-8', 'replace')
+        for pattern in (r'<meta[^>]+(?:name|property)=["\'](?:description|og:description)["\'][^>]+content=["\']([^"\']+)',
+                        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\'](?:description|og:description)["\']'):
+            match = re.search(pattern, raw, re.I)
+            if match:
+                return plain(match.group(1))[:1200]
+    except Exception:
+        pass
+    return ''
+
+def enrich(items):
+    """Enriquece solo las noticias elegidas; sin peticiones masivas a los medios."""
+    for it in items:
+        original = it['description']
+        extra = article_extra(it['link']) if len(original) < 380 else ''
+        if extra and not similar(original, extra):
+            original = (original + '. ' + extra).strip('. ')
+        improved = tidy_summary(it['title'], original)
+        # Si no hay material nuevo, mostrar el RSS en lugar de fingir un resumen.
+        it['description'] = improved or plain(it['description'])[:650]
+
 
 def fetch(source, section, url):
     try:
@@ -119,9 +207,12 @@ def fetch(source, section, url):
             max_age = 76 if WEEKEND else 52
             if not title or not link.startswith('https://') or not (NOW - dt.timedelta(hours=max_age) <= when <= NOW + dt.timedelta(hours=2)):
                 continue
-            result.append(dict(title=title, link=link, description=description[:650],
+            actual_section = classify(section, title, description)
+            if actual_section == 'Descartar':
+                continue
+            result.append(dict(title=title, link=link, description=description[:1200],
                                published=when, source=source,
-                               section=classify(section, title, description), image=image_url(it)))
+                               section=actual_section, image=image_url(it)))
         print(f'{source}: {len(result)} noticias recientes')
         return result
     except Exception as exc:
@@ -138,6 +229,12 @@ def similar(a, b):
 
 def choose(items):
     items.sort(key=lambda x: x['published'], reverse=True)
+    # Una plaza reservada a Cofradías, con prioridad para Virgen de la Alegría.
+    cofradias = [it for it in items if it['section'] == 'Cofradías']
+    cofradias.sort(key=lambda it: (bool(ALEGRIA_TERMS.search(it['title'] + ' ' + it['description'])),
+                                   it['published']), reverse=True)
+    special = cofradias[0] if cofradias else None
+    items = [it for it in items if it['section'] != 'Cofradías']
     selected, seen_links = [], set()
     sources = defaultdict(int)
     sections = defaultdict(int)
@@ -161,10 +258,12 @@ def choose(items):
     # Segunda pasada: redistribuir plazas vacías, sin perder diversidad.
     for cap in (7 if WEEKEND else 6, LIMIT):
         for it in items:
-            if len(selected) >= LIMIT:
+            if len(selected) >= BASE_LIMIT:
                 break
             add(it, cap)
     # Presentación por actualidad, no por orden de selección de las secciones.
+    if special:
+        selected.append(special)
     return sorted(selected[:LIMIT], key=lambda x: x['published'], reverse=True)
 
 # Ilustraciones decorativas integradas en el HTML: sin imágenes externas.
@@ -176,6 +275,7 @@ SECTION_ART = {
     'Ciencia': ('🔬', 'CIENCIA Y DESCUBRIMIENTOS'),
     'Cultura': ('🎭', 'CULTURA'),
     'Deportes': ('⚽', 'DEPORTES'),
+    'Cofradías': ('⛪', 'COFRADÍAS DE BURGOS'),
 }
 
 def card(it):
@@ -193,7 +293,7 @@ def card(it):
     return (f'<article id="noticia-{it.get("story_id", 0)}" class="card"><div class="visual">{fallback}{img}</div><div class="inner">'
             f'<div class="section">{e(it["section"])} · {e(it["source"])}</div>'
             f'<h2><a href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">{e(it["title"])}</a></h2>'
-            f'<p>{e(excerpt)}</p><p class="note">Resumen extraído del RSS del medio; puede ser breve o incompleto. '
+            f'<p>{e(excerpt)}</p><p class="note">Texto elaborado a partir de la descripción RSS y, cuando es accesible, la metadescripción del artículo; puede ser breve. '
             f'La fotografía, si aparece, procede del feed original. Las ilustraciones son decorativas.</p>'
             f'<a class="more" href="{e(it["link"])}" target="_blank" rel="noopener noreferrer">Leer noticia original →</a>'
             f'</div></article>')
@@ -256,6 +356,7 @@ SECTION_ORDER = [
     ('España', 'España', 'espana'),
     ('Internacional', 'Mundo', 'mundo'),
     ('Local', 'Burgos', 'burgos'),
+    ('Cofradías', 'Cofradías', 'cofradias'),
     ('Sociedad', 'Sociedad', 'sociedad'),
     ('Deportes', 'Deportes', 'deportes'),
     ('Cultura', 'Cultura', 'cultura'),
@@ -342,6 +443,7 @@ def main():
     for feed in FEEDS:
         items.extend(fetch(*feed))
     chosen = choose(items)
+    enrich(chosen)
     if len(chosen) < 5:
         raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
     date = NOW.strftime('%d/%m/%Y')
@@ -361,7 +463,7 @@ def main():
  .news-nav{{position:sticky;top:0;z-index:20;background:#fff;border-bottom:2px solid #252525;box-shadow:0 2px 8px #00000012;font-family:Arial,sans-serif}}.nav-inner{{max-width:1320px;margin:auto;display:flex;gap:4px;align-items:center;overflow-x:auto;white-space:nowrap;padding:0 12px;scrollbar-width:thin}}.news-nav a{{display:inline-block;padding:14px 13px;text-decoration:none;color:#222;font-size:13px;font-weight:700}}.news-nav a:hover,.news-nav a:focus-visible{{background:#eee9df;color:#1b6177}}.news-section{{margin:24px 0 42px;scroll-margin-top:74px}}.section-heading{{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:3px solid #262626;border-bottom:1px solid #bbb;margin:0 0 20px;padding:9px 0}}.section-heading h2{{font:700 clamp(23px,3vw,31px) Georgia,serif;margin:0}}.back-top{{font:12px Arial,sans-serif;color:#31677a;text-decoration:none}}@media(max-width:640px){{.news-nav a{{padding:12px 10px;font-size:12px}}.news-section{{margin-bottom:32px}}}}
  .weather{{max-width:850px;margin:16px auto 0;padding:13px 18px;border:1px solid #ded9cf;border-radius:9px;background:#f7f5ef;font-family:Arial,sans-serif;text-align:center}}.weather-title{{font-size:12px;letter-spacing:1.4px;font-weight:700;color:#31586a}}.weather-title span{{font-weight:400;letter-spacing:0;color:#777}}.weather-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}}.weather-time{{display:flex;flex-direction:column;align-items:center;gap:5px;border-right:1px solid #ddd;font-size:12px;color:#555}}.weather-time:last-child{{border-right:0}}.weather-hour{{font-weight:700}}.weather-icon{{font-size:24px}}.weather-time strong{{font-size:19px;color:#222}}.weather-time small{{font-size:11px}}.weather-credit{{font-size:10px;color:#777}}.weather-unavailable{{font-size:12px}}@media(max-width:640px){{.weather{{padding:11px 6px}}.weather-time strong{{font-size:17px}}.weather-time small{{font-size:10px}}}}
  .cover{{scroll-margin-top:74px;margin-bottom:35px}}.cover-heading{{font:700 30px Georgia,serif;border-bottom:3px solid #222;padding-bottom:12px;margin:0 0 20px}}.cover-lead{{display:grid;grid-template-columns:1.05fr 1fr;background:#fff;border:1px solid #dcd7cd}}.cover-image{{position:relative;min-height:340px;overflow:hidden;background:#e6e0d5}}.cover-image img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}.cover-copy{{padding:28px}}.cover-label{{font:700 12px Arial,sans-serif;letter-spacing:1px;color:#a0392f}}.cover-copy h2{{font-size:clamp(26px,3.2vw,42px);line-height:1.12;margin:14px 0}}.cover-copy p{{font:17px/1.55 Georgia,serif}}.cover-source{{display:inline-block;font:12px Arial,sans-serif;color:#666;margin-bottom:15px}}.cover-subtitle{{font:700 21px Georgia,serif;margin:25px 0 13px}}.cover-teasers{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}}.cover-teaser{{display:flex;flex-direction:column;gap:10px;text-decoration:none;color:#222;border-top:3px solid #333;background:#fff;padding:18px;min-width:0}}.cover-teaser span{{font:700 11px Arial,sans-serif;color:#2e6a80;text-transform:uppercase}}.cover-teaser strong{{font:700 19px/1.2 Georgia,serif}}.cover-teaser small{{margin-top:auto;font:12px Arial,sans-serif;color:#226079}}@media(max-width:760px){{.cover-lead{{grid-template-columns:1fr}}.cover-image{{min-height:230px}}.cover-copy{{padding:20px}}.cover-teasers{{grid-template-columns:1fr}}}}
-</style></head><body><header id="portada"><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header>{navigation}<main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos proceden de las descripciones facilitadas por los medios: no son crónicas redactadas ni verificadas de forma independiente. Pulsa cada titular para conocer los detalles.</p>{cover}{body}</main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
+</style></head><body><header id="portada"><div class="tag">Tu periódico · {edition}</div><h1>El café de la actualidad</h1><p>{date} · Burgos · Noticias seleccionadas de medios abiertos</p>{forecast_html}</header>{navigation}<main><p class="intro"><b>Actualidad para conversar.</b> Selección automática de noticias recientes de canales RSS. Los textos se elaboran a partir de descripciones RSS y metadescripciones públicas: pueden ser breves y no están verificados de forma independiente. Pulsa cada titular para conocer los detalles.</p>{cover}{body}</main><footer>Edición automática gratuita · Enlaces y derechos de las noticias y fotografías pertenecen a sus respectivos medios · Última generación: {NOW.strftime('%d/%m/%Y %H:%M')} (hora peninsular)</footer></body></html>'''
     # Guion de voz en el orden visual: portada y después secciones.
     spoken = [lead] + [it for section, _, _ in SECTION_ORDER for it in chosen
                         if it['section'] == section and it is not lead]
