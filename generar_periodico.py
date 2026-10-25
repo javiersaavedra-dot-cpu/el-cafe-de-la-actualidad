@@ -31,6 +31,10 @@ FEEDS = [
     ('El País portada', 'España', 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada'),
     ('El País Internacional', 'Internacional', 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/internacional/portada'),
     ('BBC Mundo', 'Internacional', 'https://feeds.bbci.co.uk/mundo/rss.xml'),
+    # Fuentes complementarias por Google Noticias. Se comprueba su rendimiento en Actions.
+    ('ABC', 'España', 'https://news.google.com/rss/search?q=' + quote('site:abc.es') + '&hl=es&gl=ES&ceid=ES%3Aes'),
+    ('La Vanguardia', 'España', 'https://news.google.com/rss/search?q=' + quote('site:lavanguardia.com') + '&hl=es&gl=ES&ceid=ES%3Aes'),
+    ('Europa Press', 'España', 'https://news.google.com/rss/search?q=' + quote('site:europapress.es') + '&hl=es&gl=ES&ceid=ES%3Aes'),
     ('20 Minutos', 'Sociedad', 'https://www.20minutos.es/rss/'),
     ('Xataka', 'Ciencia', 'https://www.xataka.com/index.xml'),
     ('SINC', 'Ciencia', 'https://www.agenciasinc.es/rss'),
@@ -243,44 +247,106 @@ def similar(a, b):
     common = len(wa & wb)
     return common >= 3 and common / max(1, min(len(wa), len(wb))) > 0.48
 
+# Agrupar canales del mismo editor evita contar RTVE España y RTVE Cultura
+# como si fueran periódicos diferentes.
+def source_group(source):
+    if source.startswith('RTVE '):
+        return 'RTVE'
+    if source.startswith('El País '):
+        return 'El País'
+    return source
+
+
+def source_priority(source):
+    # Preferencia suave, no veto: el acceso puede variar por artículo.
+    return 1 if source_group(source) == 'El País' else 0
+
+
 def choose(items):
-    items.sort(key=lambda x: x['published'], reverse=True)
-    # Una plaza reservada a Cofradías, con prioridad para Virgen de la Alegría.
+    """Diversifica fuentes por sección sin sacrificar frescura ni cupos."""
+    items = sorted(items, key=lambda x: x['published'], reverse=True)
     cofradias = [it for it in items if it['section'] == 'Cofradías']
     cofradias.sort(key=lambda it: (bool(ALEGRIA_TERMS.search(it['title'] + ' ' + it['description'])),
                                    it['published']), reverse=True)
     special = cofradias[0] if cofradias else None
-    items = [it for it in items if it['section'] != 'Cofradías']
+    ordinary = [it for it in items if it['section'] != 'Cofradías']
     selected, seen_links = [], set()
-    sources = defaultdict(int)
-    sections = defaultdict(int)
-    def add(it, cap_source):
-        if it['link'] in seen_links or sources[it['source']] >= cap_source:
+    by_source = defaultdict(int)
+    by_section_source = defaultdict(int)
+    by_section = defaultdict(int)
+
+    def add(it, per_section_cap, global_cap):
+        group = source_group(it['source'])
+        key = (it['section'], group)
+        if (len(selected) >= BASE_LIMIT or it['link'] in seen_links
+                or by_section_source[key] >= per_section_cap
+                or by_source[group] >= global_cap):
             return False
         if any(similar(it['title'], old['title']) for old in selected):
             return False
         selected.append(it)
         seen_links.add(it['link'])
-        sources[it['source']] += 1
-        sections[it['section']] += 1
+        by_source[group] += 1
+        by_section_source[key] += 1
+        by_section[it['section']] += 1
         return True
-    # Primera pasada: llenar secciones dentro de sus cupos.
+
+    def balanced_candidates(section=None):
+        candidates = [it for it in ordinary if section is None or it['section'] == section]
+        # Menos representados primero; dentro del mismo nivel, noticias más
+        # recientes y medios normalmente abiertos antes que El País.
+        return sorted(candidates, key=lambda it: (
+            by_section_source[(it['section'], source_group(it['source']))],
+            by_source[source_group(it['source'])],
+            source_priority(it['source']),
+            -it['published'].timestamp()))
+
+    # Cupos: primera ronda un artículo por fuente y sección, luego segunda, etc.
     for section, quota in QUOTAS.items():
-        for it in items:
-            if sections[section] >= quota:
+        while by_section[section] < quota and len(selected) < BASE_LIMIT:
+            progress = False
+            for it in balanced_candidates(section):
+                if by_section[section] >= quota:
+                    break
+                if add(it, 3, 5 if WEEKEND else 4):
+                    progress = True
+                    break  # Reordenar después de cada elección.
+            if not progress:
                 break
-            if it['section'] == section:
-                add(it, 7 if WEEKEND else 6)
-    # Segunda pasada: redistribuir plazas vacías, sin perder diversidad.
-    for cap in (7 if WEEKEND else 6, LIMIT):
-        for it in items:
-            if len(selected) >= BASE_LIMIT:
+
+    # Redistribuir cupos vacíos. Relajar límites solo si faltan noticias.
+    for section_cap, global_cap in ((3, 5 if WEEKEND else 4), (5, 8), (BASE_LIMIT, BASE_LIMIT)):
+        while len(selected) < BASE_LIMIT:
+            progress = False
+            for it in balanced_candidates():
+                if add(it, section_cap, global_cap):
+                    progress = True
+                    break
+            if not progress:
                 break
-            add(it, cap)
-    # Presentación por actualidad, no por orden de selección de las secciones.
+
     if special:
         selected.append(special)
-    return sorted(selected[:LIMIT], key=lambda x: x['published'], reverse=True)
+    return sorted(selected, key=lambda x: x['published'], reverse=True)
+
+
+def print_source_report(all_items, chosen):
+    """Diagnóstico visible en el registro de GitHub Actions."""
+    available = defaultdict(int)
+    used = defaultdict(int)
+    for it in all_items:
+        available[(it['section'], source_group(it['source']))] += 1
+    for it in chosen:
+        used[(it['section'], source_group(it['source']))] += 1
+    print('\n=== INFORME DE FUENTES POR SECCIÓN (disponibles -> elegidas) ===')
+    for section in list(QUOTAS) + ['Cofradías']:
+        keys = sorted((key for key in available if key[0] == section),
+                      key=lambda key: (-used[key], -available[key], key[1]))
+        if not keys:
+            print(f'{section}: sin noticias recientes')
+        for key in keys:
+            print(f'  {section} | {key[1]}: {available[key]} -> {used[key]}')
+    print('=== FIN DEL INFORME ===\n')
 
 # Ilustraciones decorativas integradas en el HTML: sin imágenes externas.
 SECTION_ART = {
@@ -459,6 +525,7 @@ def main():
     for feed in FEEDS:
         items.extend(fetch(*feed))
     chosen = choose(items)
+    print_source_report(items, chosen)
     enrich(chosen)
     if len(chosen) < 5:
         raise SystemExit('Menos de cinco noticias recientes disponibles: se conserva la edición anterior.')
