@@ -118,16 +118,21 @@ INTERNATIONAL = re.compile(
     r'bruselas|unión europea|otan)\b', re.I)
 COFRADIA_TERMS = re.compile(
     r'cofrad[ií]a|hermandad|semana santa|procesi[oó]n|virgen de la alegr[ií]a|'
-    r'paso procesional|junta de semana santa|santo entierro', re.I)
+    r'paso procesional|junta de semana santa|santo entierro|virgen de la soledad', re.I)
 BURGOS_TERMS = re.compile(r'burgos|burgales[ae]s?|castilla y le[oó]n', re.I)
 ALEGRIA_TERMS = re.compile(r'(virgen|señora|cofrad[ií]a).{0,32}alegr[ií]a', re.I)
 
-def is_cofradia(title, description, link=''):
+def is_cofradia(title, description, source='', section=''):
     text = title + ' ' + description[:400]
+    # Los medios locales identificados permiten reconocer advocaciones que
+    # no mencionan Burgos en el propio titular (p. ej., Virgen de la Soledad).
+    local_source = section == 'Local' and source in (
+        'El Correo de Burgos', 'Burgos Conecta', 'Diario de Burgos')
     return bool(COFRADIA_TERMS.search(text) and
-                (BURGOS_TERMS.search(text) or ALEGRIA_TERMS.search(text)))
+                (BURGOS_TERMS.search(text) or ALEGRIA_TERMS.search(text)
+                 or local_source))
 
-def classify(section, title, description):
+def classify(section, title, description, source=''):
     """Clasifica por contenido sin confundir la procedencia del RSS con el tema."""
     t = (title + ' ' + description[:180]).lower()
     science = ('investigación', 'científic', 'astronom', 'nasa', 'espacial',
@@ -136,7 +141,7 @@ def classify(section, title, description):
                'festival', 'concierto', 'patrimonio', 'historia del')
     local = ('burgos', 'castilla y león', 'valladolid', 'palencia', 'soria', 'segovia',
              'salamanca', 'zamora', 'ávila', 'león')
-    if is_cofradia(title, description):
+    if is_cofradia(title, description, source, section):
         return 'Cofradías'
     if section == 'Cofradías':
         return 'Descartar'  # Evita noticias de cofradías de otras provincias.
@@ -286,7 +291,10 @@ def quality_enrich(items):
     print('=== CANDIDATAS CON CONTENIDO COMPROBADO ===')
     for section in QUOTAS:
         print(f'{section}: {counts[section]} candidatas con resumen')
-    return [it for it in results if it['description']]
+    # Excepción editorial: una noticia reciente sobre cofradías de Burgos
+    # puede mostrarse con su titular y enlace aunque el RSS no dé resumen.
+    # Las demás secciones mantienen el filtro de resúmenes útiles.
+    return [it for it in results if it['description'] or it['section'] == 'Cofradías']
 
 
 def fetch(source, section, url):
@@ -319,7 +327,7 @@ def fetch(source, section, url):
             max_age = 76 if WEEKEND else 52
             if not title or not link.startswith('https://') or not (NOW - dt.timedelta(hours=max_age) <= when <= NOW + dt.timedelta(hours=2)):
                 continue
-            actual_section = classify(section, title, description)
+            actual_section = classify(section, title, description, source)
             if actual_section == 'Descartar':
                 continue
             result.append(dict(title=title, link=link, description=description[:1200],
@@ -426,7 +434,7 @@ def choose(items):
             if not progress:
                 break
 
-    if special and special.get('description'):
+    if special:
         selected.append(special)
     return sorted(selected, key=lambda x: x['published'], reverse=True)
 
@@ -604,7 +612,8 @@ def sections_html(chosen, lead):
     """Agrupa las noticias por sección y crea destinos para el menú."""
     output = []
     for section, label, anchor in SECTION_ORDER:
-        articles = [item for item in chosen if item['section'] == section and item is not lead]
+        articles = [item for item in chosen if item['section'] == section and
+                    (item is not lead or section == 'Cofradías')]
         if not articles:
             continue
         output.append(f'<section class="news-section" id="{anchor}" aria-labelledby="heading-{anchor}">'
