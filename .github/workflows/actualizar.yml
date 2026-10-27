@@ -22,7 +22,7 @@ jobs:
           import os,datetime
           from zoneinfo import ZoneInfo
           now=datetime.datetime.now(ZoneInfo('Europe/Madrid'))
-          ok=os.environ['EVENTO']=='workflow_dispatch' or (now.hour==7 and now.minute<=59)
+          ok=True
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f'run={str(ok).lower()}\n')
           print('Hora de Madrid:',now,'Ejecutar:',ok)
           PY
