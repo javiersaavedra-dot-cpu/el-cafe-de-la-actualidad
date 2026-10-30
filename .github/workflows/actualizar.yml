@@ -32,6 +32,10 @@ jobs:
       - name: Instalar voz
         if: steps.hora.outputs.run == 'true'
         run: python -m pip install edge-tts
+      - name: Instalar FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Crear MP3 y añadir reproductor
         if: steps.hora.outputs.run == 'true'
         run: |
